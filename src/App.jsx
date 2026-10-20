@@ -94,7 +94,7 @@ function detectCategory(text = '') {
 }
 
 export default function App() {
-  const [posts, setPosts] = useState([]);
+const [posts, setPosts] = useState(defaultPosts || []);
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -105,18 +105,21 @@ export default function App() {
   const [selectedPostDetail, setSelectedPostDetail] = useState(null);
   const [importStats, setImportStats] = useState(null);
   const fileInputRef = useRef(null);
-
-  // With this:
 useEffect(() => {
-  getAllPostsFromDB().then((data) => {
-    if (data && data.length > 0) {
-      setPosts(data);
-    } else {
-      setPosts(defaultPosts);
-      savePostsToDB(defaultPosts);
-    }
-  });
-}, []);
+    getAllPostsFromDB().then((data) => {
+      if (data && data.length > 0) {
+        // If user already had personal edits/notes saved in their browser, load them
+        setPosts(data);
+      } else if (defaultPosts && defaultPosts.length > 0) {
+        // First-time visitor: seed their browser with the 130 posts
+        setPosts(defaultPosts);
+        savePostsToDB(defaultPosts);
+      }
+    }).catch((err) => {
+      console.warn("IndexedDB load fallback to bundled posts:", err);
+      setPosts(defaultPosts || []);
+    });
+  }, []);
 
   useEffect(() => {
     if (darkMode) {
