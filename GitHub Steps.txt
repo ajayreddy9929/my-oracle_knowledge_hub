@@ -1,0 +1,9 @@
+1. Save JSON file with .Js
+export const defaultPosts =
+
+2. Run
+npm run build
+git add .
+git commit -m "Update posts library with latest LinkedIn posts"
+git push origin main
+npx gh-pages -d dist -f

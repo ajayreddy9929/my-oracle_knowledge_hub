@@ -4,60 +4,8 @@ import * as XLSX from 'xlsx';
 import {
   Search, Bookmark, ExternalLink, Moon, Sun, 
   Upload, Download, Plus, BookOpen, Trash2, 
-  Edit3, X
+  Edit3, X, Menu, ChevronDown, ChevronUp
 } from 'lucide-react';
-
-// IndexedDB Storage Helpers
-const DB_NAME = 'MyKnowledgeHubDB';
-const STORE_NAME = 'posts';
-const DB_VERSION = 1;
-
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function getAllPostsFromDB() {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function savePostsToDB(posts) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    posts.forEach((item) => store.put(item));
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function deletePostFromDB(id) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    store.delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
 
 const CATEGORIES = [
   'All',
@@ -94,35 +42,43 @@ function detectCategory(text = '') {
 }
 
 export default function App() {
-  // Always initialize directly with defaultPosts so data is instantly rendered for every visitor
-  const [posts, setPosts] = useState(() => (Array.isArray(defaultPosts) && defaultPosts.length > 0 ? defaultPosts : []));
+  // Initialize with bundled posts or saved localStorage updates
+  const [posts, setPosts] = useState(() => {
+    try {
+      const saved = localStorage.getItem('my_knowledge_hub_posts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.warn('Storage read error:', e);
+    }
+    return defaultPosts || [];
+  });
+
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
   const [darkMode, setDarkMode] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile drawer & desktop toggle
+  const [expandedCards, setExpandedCards] = useState({}); // Track expanded posts in feed
   const [activeModal, setActiveModal] = useState(null);
   const [editingPost, setEditingPost] = useState(null);
   const [selectedPostDetail, setSelectedPostDetail] = useState(null);
   const [importStats, setImportStats] = useState(null);
   const fileInputRef = useRef(null);
 
-  // Sync with IndexedDB without wiping out the bundled posts
+  // Sync to local storage
   useEffect(() => {
-    getAllPostsFromDB()
-      .then((stored) => {
-        if (stored && stored.length > 0) {
-          // If the user already made edits or saved notes in their browser, use their stored version
-          setPosts(stored);
-        } else if (defaultPosts && defaultPosts.length > 0) {
-          // Seed the browser's IndexedDB for next visits
-          savePostsToDB(defaultPosts).catch(console.error);
-        }
-      })
-      .catch((err) => {
-        console.warn("IndexedDB unavailable, using memory dataset:", err);
-      });
-  }, []);
+    try {
+      if (posts && posts.length > 0) {
+        localStorage.setItem('my_knowledge_hub_posts', JSON.stringify(posts));
+      }
+    } catch (e) {
+      console.warn('Storage write error:', e);
+    }
+  }, [posts]);
 
   useEffect(() => {
     if (darkMode) {
@@ -132,10 +88,8 @@ export default function App() {
     }
   }, [darkMode]);
 
-  const handleUpdatePost = async (updatedPost) => {
-    const nextPosts = posts.map((p) => (p.id === updatedPost.id ? updatedPost : p));
-    setPosts(nextPosts);
-    await savePostsToDB([updatedPost]);
+  const handleUpdatePost = (updatedPost) => {
+    setPosts((prev) => prev.map((p) => (p.id === updatedPost.id ? updatedPost : p)));
     if (selectedPostDetail && selectedPostDetail.id === updatedPost.id) {
       setSelectedPostDetail(updatedPost);
     }
@@ -152,12 +106,16 @@ export default function App() {
     handleUpdatePost({ ...post, readStatus: nextStatus });
   };
 
-  const handleDeletePost = async (id, e) => {
+  const handleDeletePost = (id, e) => {
     e?.stopPropagation();
     if (!confirm('Are you sure you want to delete this post?')) return;
     setPosts((prev) => prev.filter((p) => p.id !== id));
-    await deletePostFromDB(id);
     if (selectedPostDetail?.id === id) setSelectedPostDetail(null);
+  };
+
+  const toggleCardExpand = (id, e) => {
+    e?.stopPropagation();
+    setExpandedCards((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   const handleFileUpload = (e) => {
@@ -167,7 +125,7 @@ export default function App() {
     const reader = new FileReader();
     const ext = file.name.split('.').pop().toLowerCase();
 
-    reader.onload = async (evt) => {
+    reader.onload = (evt) => {
       try {
         let importedRecords = [];
         if (ext === 'json') {
@@ -230,7 +188,6 @@ export default function App() {
         const mergedArray = Array.from(mergedMap.values());
 
         setPosts(mergedArray);
-        await savePostsToDB(mergedArray);
         setImportStats({ total: importedRecords.length, added: addedCount, updated: updatedCount });
       } catch (err) {
         alert('Error parsing file: ' + err.message);
@@ -282,29 +239,53 @@ export default function App() {
   }, [posts, selectedCategory, statusFilter, searchQuery, sortBy]);
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col shrink-0">
+    <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 overflow-hidden relative">
+      {/* Mobile Backdrop Overlay */}
+      {sidebarOpen && (
+        <div 
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-30 md:hidden"
+        />
+      )}
+
+      {/* Sidebar: Responsive Drawer on Mobile, Collapsible on Desktop */}
+      <aside 
+        className={`fixed md:static inset-y-0 left-0 z-40 w-72 md:w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col shrink-0 transition-transform duration-300 ease-in-out ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        }`}
+      >
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
               Ω
             </div>
-            <span className="font-bold text-lg text-slate-900 dark:text-white">Knowledge Hub</span>
+            <span className="font-bold text-base md:text-lg text-slate-900 dark:text-white">Knowledge Hub</span>
           </div>
-          <button
-            onClick={() => setDarkMode(!darkMode)}
-            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500"
-          >
-            {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500"
+              title="Toggle Dark Mode"
+            >
+              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 md:hidden"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Quick Filters */}
         <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-1 text-sm font-medium">
           <button
-            onClick={() => setStatusFilter('all')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg ${
+            onClick={() => {
+              setStatusFilter('all');
+              setSidebarOpen(false);
+            }}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition ${
               statusFilter === 'all' ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
@@ -312,8 +293,11 @@ export default function App() {
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700">{posts.length}</span>
           </button>
           <button
-            onClick={() => setStatusFilter('favorite')}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg ${
+            onClick={() => {
+              setStatusFilter('favorite');
+              setSidebarOpen(false);
+            }}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition ${
               statusFilter === 'favorite' ? 'bg-amber-50 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
@@ -333,10 +317,13 @@ export default function App() {
             return (
               <button
                 key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                onClick={() => {
+                  setSelectedCategory(cat);
+                  setSidebarOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition ${
                   active
-                    ? 'bg-blue-600 text-white font-semibold'
+                    ? 'bg-blue-600 text-white font-semibold shadow-sm'
                     : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                 }`}
               >
@@ -352,14 +339,17 @@ export default function App() {
         {/* Action buttons */}
         <div className="p-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
           <button
-            onClick={() => setActiveModal('import')}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+            onClick={() => {
+              setActiveModal('import');
+              setSidebarOpen(false);
+            }}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
           >
             <Upload size={16} /> Import Posts
           </button>
           <button
             onClick={handleExportBackup}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
           >
             <Download size={16} /> Backup JSON
           </button>
@@ -369,45 +359,54 @@ export default function App() {
       {/* Main Container */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Navbar */}
-        <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 flex items-center justify-between gap-4 shrink-0">
+        <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 md:px-6 flex items-center justify-between gap-3 shrink-0">
+          {/* Mobile Hamburger Button */}
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 md:hidden shrink-0"
+            aria-label="Open Menu"
+          >
+            <Menu size={20} />
+          </button>
+
           <div className="flex-1 relative max-w-xl">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
             <input
               type="text"
-              placeholder="Search posts, authors, notes, tags..."
+              placeholder="Search posts, author, notes..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full pl-9 pr-3 py-1.5 md:py-2 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
             />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 shrink-0">
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="text-xs bg-slate-100 dark:bg-slate-800 px-3 py-2 rounded-lg border-none outline-none font-medium text-slate-600 dark:text-slate-300 cursor-pointer"
+              className="text-xs bg-slate-100 dark:bg-slate-800 px-2 py-1.5 md:px-3 md:py-2 rounded-lg border-none outline-none font-medium text-slate-600 dark:text-slate-300 cursor-pointer hidden sm:block"
             >
-              <option value="newest">Sort: Newest First</option>
-              <option value="oldest">Sort: Oldest First</option>
-              <option value="author">Sort: Author A-Z</option>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="author">Author A-Z</option>
             </select>
 
             <button
               onClick={() => setActiveModal('addManual')}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm transition"
+              className="flex items-center gap-1.5 px-3 py-1.5 md:py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs md:text-sm font-semibold shadow-sm transition"
             >
-              <Plus size={16} /> Add Post
+              <Plus size={16} /> <span className="hidden sm:inline">Add Post</span>
             </button>
           </div>
         </header>
 
         {/* Content Feed */}
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50 dark:bg-slate-950">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-50 dark:bg-slate-950">
           <div className="max-w-6xl mx-auto space-y-4">
-            <div className="flex items-center justify-between pb-2">
-              <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+            <div className="flex items-center justify-between pb-1">
+              <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
                 <span>{selectedCategory}</span>
-                <span className="text-sm font-normal text-slate-500">({filteredPosts.length} posts found)</span>
+                <span className="text-xs md:text-sm font-normal text-slate-500">({filteredPosts.length} posts)</span>
               </h2>
             </div>
 
@@ -428,89 +427,129 @@ export default function App() {
               </div>
             )}
 
-            {/* Cards Grid */}
+            {/* Cards Grid: Full size on mobile, 2 columns on tablet, 3 on large desktop */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredPosts.map((post) => (
-                <div
-                  key={post.id}
-                  onClick={() => setSelectedPostDetail(post)}
-                  className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between hover:shadow-md hover:border-blue-400 dark:hover:border-blue-500 transition cursor-pointer"
-                >
-                  <div>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
-                        {post.category}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={(e) => toggleFavorite(post, e)}
-                          className={`p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition ${
-                            post.favorite ? 'text-amber-500' : 'text-slate-400'
-                          }`}
-                        >
-                          <Bookmark size={16} fill={post.favorite ? 'currentColor' : 'none'} />
-                        </button>
-                        <button
-                          onClick={(e) => cycleStatus(post, e)}
-                          className="text-xs px-2 py-0.5 rounded font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
-                        >
-                          {post.readStatus || 'unread'}
-                        </button>
+              {filteredPosts.map((post) => {
+                const isExpanded = !!expandedCards[post.id];
+                const isLongText = (post.text || '').length > 250;
+
+                return (
+                  <div
+                    key={post.id}
+                    onClick={() => setSelectedPostDetail(post)}
+                    className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 md:p-5 flex flex-col justify-between hover:shadow-md hover:border-blue-400 dark:hover:border-blue-500 transition cursor-pointer"
+                  >
+                    <div>
+                      {/* Card Header */}
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300">
+                          {post.category}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => toggleFavorite(post, e)}
+                            className={`p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition ${
+                              post.favorite ? 'text-amber-500' : 'text-slate-400'
+                            }`}
+                            title="Favorite"
+                          >
+                            <Bookmark size={16} fill={post.favorite ? 'currentColor' : 'none'} />
+                          </button>
+                          <button
+                            onClick={(e) => cycleStatus(post, e)}
+                            className="text-xs px-2 py-0.5 rounded font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 capitalize"
+                          >
+                            {post.readStatus || 'unread'}
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Author */}
+                      <h3 className="font-bold text-sm md:text-base text-slate-900 dark:text-white mt-1">
+                        {post.author}
+                      </h3>
+
+                      {/* Full Post Text with Show More / Show Less Toggle */}
+                      <div className="mt-2 text-xs md:text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
+                        {isExpanded || !isLongText ? (
+                          post.text
+                        ) : (
+                          <>
+                            {post.text.slice(0, 250)}...
+                          </>
+                        )}
+                      </div>
+
+                      {/* Expand / Collapse Button if post is long */}
+                      {isLongText && (
+                        <button
+                          onClick={(e) => toggleCardExpand(post.id, e)}
+                          className="mt-2 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                        >
+                          {isExpanded ? (
+                            <>Show less <ChevronUp size={14} /></>
+                          ) : (
+                            <>Show full post <ChevronDown size={14} /></>
+                          )}
+                        </button>
+                      )}
+
+                      {/* Tags */}
+                      {post.tags && post.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-3">
+                          {post.tags.slice(0, 4).map((tag, i) => (
+                            <span key={i} className="text-[11px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    <h3 className="font-semibold text-sm text-slate-900 dark:text-white line-clamp-1">{post.author}</h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-4 leading-relaxed whitespace-pre-wrap">
-                      {post.text}
-                    </p>
+                    {/* Card Footer */}
+                    <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                      {post.postLink ? (
+                        <a
+                          href={post.postLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-blue-600 dark:text-blue-400 flex items-center gap-1 font-semibold hover:underline"
+                        >
+                          LinkedIn <ExternalLink size={12} />
+                        </a>
+                      ) : (
+                        <span className="text-slate-400">Manual Entry</span>
+                      )}
 
-                    {post.tags && post.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-3">
-                        {post.tags.slice(0, 3).map((tag, i) => (
-                          <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
-                            #{tag}
+                      <div className="flex items-center gap-2">
+                        {post.notes && (
+                          <span className="text-[10px] bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 px-1.5 py-0.5 rounded font-medium">
+                            Notes
                           </span>
-                        ))}
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingPost(post);
+                          }}
+                          className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                          title="Edit"
+                        >
+                          <Edit3 size={15} />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeletePost(post.id, e)}
+                          className="p-1 text-slate-400 hover:text-red-500"
+                          title="Delete"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </div>
-                    )}
-                  </div>
-
-                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-                    {post.postLink ? (
-                      <a
-                        href={post.postLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-blue-600 dark:text-blue-400 flex items-center gap-1 font-medium hover:underline"
-                      >
-                        LinkedIn <ExternalLink size={12} />
-                      </a>
-                    ) : (
-                      <span className="text-slate-400">Manual Entry</span>
-                    )}
-
-                    <div className="flex items-center gap-2">
-                      {post.notes && <span className="text-[10px] bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 px-1.5 py-0.5 rounded font-medium">Notes</span>}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingPost(post);
-                        }}
-                        className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                      >
-                        <Edit3 size={14} />
-                      </button>
-                      <button
-                        onClick={(e) => handleDeletePost(post.id, e)}
-                        className="text-slate-400 hover:text-red-500"
-                      >
-                        <Trash2 size={14} />
-                      </button>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -519,33 +558,33 @@ export default function App() {
       {/* Post Detail Drawer */}
       {selectedPostDetail && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex justify-end">
-          <div className="w-full max-w-xl bg-white dark:bg-slate-900 h-full p-6 overflow-y-auto flex flex-col justify-between shadow-2xl">
+          <div className="w-full max-w-xl bg-white dark:bg-slate-900 h-full p-5 md:p-6 overflow-y-auto flex flex-col justify-between shadow-2xl">
             <div>
               <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
-                <span className="text-xs font-semibold px-2 py-1 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200 rounded">
+                <span className="text-xs font-semibold px-2.5 py-1 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200 rounded">
                   {selectedPostDetail.category}
                 </span>
-                <button onClick={() => setSelectedPostDetail(null)} className="text-slate-400 hover:text-slate-600">
+                <button onClick={() => setSelectedPostDetail(null)} className="text-slate-400 hover:text-slate-600 p-1">
                   <X size={20} />
                 </button>
               </div>
 
               <div className="mt-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">{selectedPostDetail.author}</h2>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h2 className="text-lg md:text-xl font-bold text-slate-900 dark:text-white">{selectedPostDetail.author}</h2>
                   {selectedPostDetail.postLink && (
                     <a
                       href={selectedPostDetail.postLink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700 shadow-sm"
                     >
                       Open in LinkedIn <ExternalLink size={12} />
                     </a>
                   )}
                 </div>
 
-                <div className="mt-4 p-4 rounded-lg bg-slate-50 dark:bg-slate-800 text-sm whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 max-h-72 overflow-y-auto">
+                <div className="mt-4 p-4 rounded-lg bg-slate-50 dark:bg-slate-800 text-sm whitespace-pre-wrap leading-relaxed text-slate-800 dark:text-slate-200 max-h-80 overflow-y-auto">
                   {selectedPostDetail.text}
                 </div>
 
@@ -587,7 +626,7 @@ export default function App() {
             <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 flex justify-end">
               <button
                 onClick={() => setSelectedPostDetail(null)}
-                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs font-semibold rounded-md"
+                className="px-5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs font-semibold rounded-md"
               >
                 Done
               </button>
@@ -697,14 +736,14 @@ export default function App() {
                 Cancel
               </button>
               <button
-                onClick={async () => {
+                onClick={() => {
                   const author = document.getElementById('authorInput').value;
                   const postLink = document.getElementById('linkInput').value;
                   const category = document.getElementById('catInput').value;
                   const text = document.getElementById('textInput').value;
 
                   if (editingPost) {
-                    await handleUpdatePost({ ...editingPost, author, postLink, category, text });
+                    handleUpdatePost({ ...editingPost, author, postLink, category, text });
                   } else {
                     const newPost = {
                       id: `post-${Date.now()}`,
@@ -720,9 +759,7 @@ export default function App() {
                       summary: '',
                       importedAt: new Date().toISOString()
                     };
-                    const nextList = [newPost, ...posts];
-                    setPosts(nextList);
-                    await savePostsToDB([newPost]);
+                    setPosts((prev) => [newPost, ...prev]);
                   }
                   setEditingPost(null);
                   setActiveModal(null);
