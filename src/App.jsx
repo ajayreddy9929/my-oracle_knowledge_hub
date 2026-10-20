@@ -1,5 +1,5 @@
-import { defaultPosts } from './postsData';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { defaultPosts } from './postsData';
 import * as XLSX from 'xlsx';
 import {
   Search, Bookmark, ExternalLink, Moon, Sun, 
@@ -94,7 +94,8 @@ function detectCategory(text = '') {
 }
 
 export default function App() {
-const [posts, setPosts] = useState(defaultPosts || []);
+  // Always initialize directly with defaultPosts so data is instantly rendered for every visitor
+  const [posts, setPosts] = useState(() => (Array.isArray(defaultPosts) && defaultPosts.length > 0 ? defaultPosts : []));
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -105,20 +106,22 @@ const [posts, setPosts] = useState(defaultPosts || []);
   const [selectedPostDetail, setSelectedPostDetail] = useState(null);
   const [importStats, setImportStats] = useState(null);
   const fileInputRef = useRef(null);
-useEffect(() => {
-    getAllPostsFromDB().then((data) => {
-      if (data && data.length > 0) {
-        // If user already had personal edits/notes saved in their browser, load them
-        setPosts(data);
-      } else if (defaultPosts && defaultPosts.length > 0) {
-        // First-time visitor: seed their browser with the 130 posts
-        setPosts(defaultPosts);
-        savePostsToDB(defaultPosts);
-      }
-    }).catch((err) => {
-      console.warn("IndexedDB load fallback to bundled posts:", err);
-      setPosts(defaultPosts || []);
-    });
+
+  // Sync with IndexedDB without wiping out the bundled posts
+  useEffect(() => {
+    getAllPostsFromDB()
+      .then((stored) => {
+        if (stored && stored.length > 0) {
+          // If the user already made edits or saved notes in their browser, use their stored version
+          setPosts(stored);
+        } else if (defaultPosts && defaultPosts.length > 0) {
+          // Seed the browser's IndexedDB for next visits
+          savePostsToDB(defaultPosts).catch(console.error);
+        }
+      })
+      .catch((err) => {
+        console.warn("IndexedDB unavailable, using memory dataset:", err);
+      });
   }, []);
 
   useEffect(() => {
@@ -263,9 +266,9 @@ useEffect(() => {
         const q = searchQuery.toLowerCase();
         const matchesSearch =
           !searchQuery ||
-          post.author.toLowerCase().includes(q) ||
-          post.text.toLowerCase().includes(q) ||
-          post.notes?.toLowerCase().includes(q) ||
+          (post.author && post.author.toLowerCase().includes(q)) ||
+          (post.text && post.text.toLowerCase().includes(q)) ||
+          (post.notes && post.notes.toLowerCase().includes(q)) ||
           (post.tags && post.tags.some((tag) => tag.toLowerCase().includes(q)));
 
         return matchesCategory && matchesStatus && matchesSearch;
@@ -273,7 +276,7 @@ useEffect(() => {
       .sort((a, b) => {
         if (sortBy === 'newest') return (b.importedAt || '').localeCompare(a.importedAt || '');
         if (sortBy === 'oldest') return (a.importedAt || '').localeCompare(b.importedAt || '');
-        if (sortBy === 'author') return a.author.localeCompare(b.author);
+        if (sortBy === 'author') return (a.author || '').localeCompare(b.author || '');
         return 0;
       });
   }, [posts, selectedCategory, statusFilter, searchQuery, sortBy]);
