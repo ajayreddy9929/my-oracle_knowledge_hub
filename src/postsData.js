@@ -1,3 +1,4 @@
+export const defaultPosts =
 [
   {
     "id": "post-1792516017127-0",

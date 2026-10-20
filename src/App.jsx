@@ -1,4 +1,4 @@
-import defaultPosts from './posts_data.json';
+import { defaultPosts } from './postsData';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
