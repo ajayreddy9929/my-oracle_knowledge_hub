@@ -1,3 +1,4 @@
+import defaultPosts from './posts_data.json';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
@@ -105,9 +106,17 @@ export default function App() {
   const [importStats, setImportStats] = useState(null);
   const fileInputRef = useRef(null);
 
-  useEffect(() => {
-    getAllPostsFromDB().then((data) => setPosts(data));
-  }, []);
+  // With this:
+useEffect(() => {
+  getAllPostsFromDB().then((data) => {
+    if (data && data.length > 0) {
+      setPosts(data);
+    } else {
+      setPosts(defaultPosts);
+      savePostsToDB(defaultPosts);
+    }
+  });
+}, []);
 
   useEffect(() => {
     if (darkMode) {
